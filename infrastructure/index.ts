@@ -8,6 +8,9 @@ import * as containerregistry from "@pulumi/azure-native/containerregistry";
 import * as containerinstance from "@pulumi/azure-native/containerinstance";
 
 
+import * as cache from "@pulumi/azure-native/redis";
+
+
 const config = new pulumi.Config();
 
 const appPath = config.require("appPath");
@@ -73,7 +76,36 @@ const image = new dockerBuild.Image(`${prefixName}-image`, {
   ],
 });
 
+const redisCache = new cache.Redis(`${prefixName}-redis`, {
+  name: `${prefixName.replace(/-/g, "")}cache`,
+  resourceGroupName: resourceGroup.name,
+//  location: resourceGroup.location,
+  location: "eastus2",
+  enableNonSslPort: false,
+  redisVersion: "6",
+  minimumTlsVersion: "1.2",
+  redisConfiguration: {
+    maxmemoryPolicy: "allkeys-lru",
+  },
+  sku: {
+    name: "Basic",
+    family: "C",
+    capacity: 0,
+  },
+});
 
+
+
+const redisAccessKey = cache
+  .listRedisKeysOutput({
+    name: redisCache.name,
+    resourceGroupName: resourceGroup.name,
+  })
+  .apply((keys) => keys.primaryKey);
+
+
+
+const redisConnectionString = pulumi.interpolate`rediss://:${redisAccessKey}@${redisCache.hostName}:${redisCache.sslPort}`;
 
 const containerGroup = new containerinstance.ContainerGroup(
   `${prefixName}-container-group`,
@@ -110,9 +142,17 @@ const containerGroup = new containerinstance.ContainerGroup(
           {
             name: "WEATHER_API_KEY",
 //            value: "YOUR_OPENWEATHER_API_KEY",
-            value: "23763f524c394237e934606a5a7e018f",
+//            value: "23763f524c394237e934606a5a7e018f",
+            value: config.requireSecret("weatherApiKey"),
 
           },
+
+          {
+            name: "REDIS_URL",
+            value: redisConnectionString,
+          },
+
+
         ],
 
         resources: {
@@ -150,4 +190,7 @@ export const ip = containerGroup.ipAddress.apply(
 export const url = containerGroup.ipAddress.apply(
   (addr) => `http://${addr!.fqdn!}:${containerPort}`
 );
+
+
+
 
